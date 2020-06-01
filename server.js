@@ -15,7 +15,9 @@ const config = require('./app/config');
 const compressing = require('compressing');
 var rimraf = require("rimraf");
 const { TIMELOGGER } = require('./app/winston.js');
-
+const ERROR = 'error';
+const SUCCESS = 'success';
+var startTime = new Date();
 // const path = require('path');
 const fs = require('fs');
 // Load the AWS SDK for Node.js
@@ -59,6 +61,7 @@ const syncSequelize = function () {
         // start cron after database syncup
         cron.schedule(config.SCHDULE_INTERVAL, function () {
             console.log(' Scheduler ', new Date().getSeconds());
+            startTime = new Date();
             backupMysql();
             backupNeo4j();
         });
@@ -83,13 +86,14 @@ const backupMysql = function () {
         } catch (err) {
             // console.log('move_file mkdirSync err ');
             TIMELOGGER.error(`move_file mkdirSync err: ${err}`);
+            batch_process_log(err, startTime, ERROR);
         }
     }
     let sqlFileName = `${config.SQL_BACKUP_FOLDER}/${config.SQL_BACKUP_FILE}_${getDate()}.sql.gz`;
     let sqlBackupFileName = `${config.BACKUP_ARCHIVE}/${config.SQL_BACKUP_FILE}_backup_${getDate()}.sql.gz`;
-    console.log('sqlFileName ', sqlFileName)
-    console.log('sqlBackupFileName ', sqlBackupFileName);
-    
+    // console.log('sqlFileName ', sqlFileName)
+    // console.log('sqlBackupFileName ', sqlBackupFileName);
+
     mysqldump({
         connection: {
             host: config.SQL.host,
@@ -107,14 +111,15 @@ const backupMysql = function () {
             moveToBackUp(sqlFileName, sqlBackupFileName);
         }
     })
-    .catch(err => {
-        console.log('******************* ', err);
-    });
+        .catch(err => {
+            console.log('******************* ', err);
+            batch_process_log(err, startTime, ERROR);
+        });
 }
 
 const backupNeo4j = function () {
     let data = spawn("node", ["./app/neo4j-backup.js", "-a", "bolt://" + config.NEO4J_HOST, "-u",
-    config.NEO4J_USERNAME, "-p", config.NEO4J_PASSWORD, "-d", `${config.NEO4J_BACKUP_FILE}`]);
+        config.NEO4J_USERNAME, "-p", config.NEO4J_PASSWORD, "-d", `${config.NEO4J_BACKUP_FILE}`]);
 
     data.stdout.on("data", data => {
         console.log(`stdout: ${data}`);
@@ -124,11 +129,13 @@ const backupNeo4j = function () {
     data.stderr.on("data", data => {
         console.log(`stderr: ${data}`);
         TIMELOGGER.error(`stderr: ${JSON.stringify(data)}`);
+        batch_process_log(data, startTime, ERROR);
     });
 
     data.on('error', (error) => {
         console.log(`error: ${error.message}`);
         TIMELOGGER.error(`error: ${error.message}`);
+        batch_process_log(error, startTime, ERROR);
         return;
     });
 
@@ -148,8 +155,8 @@ const zipBackupFolder = function () {
             console.log('Done');
             rimraf(config.NEO4J_BACKUP_FILE, function () {
                 TIMELOGGER.info(`Neo4j backup Zip created and folder removed`);
-                console.log("done"); 
-                });
+                console.log("done");
+            });
             TIMELOGGER.info(`Zipped Successfully ${config.NEO4J_BACKUP_FILE}.gz`);
             if (config.AWS_ACCESS_KEY_ID && config.SECRET_ACCESS_KEY_ID && config.S3_BUCKET_NAME) {
                 uploadFile(neo4JZip, neo4JBackupZip);
@@ -160,6 +167,7 @@ const zipBackupFolder = function () {
         .catch(err => {
             console.log('err ', err);
             TIMELOGGER.error(`${JSON.stringify(err)}`);
+            batch_process_log(err, startTime, ERROR);
         });
 }
 
@@ -172,7 +180,8 @@ const uploadFile = (filePath, backupPath) => {
     TIMELOGGER.info(`Uploading ${fileName} To S3.`);
     fs.readFile(filePath, (err, data) => {
         if (err) {
-            TIMELOGGER.error(`${JSON.stringify(err)}`)
+            TIMELOGGER.error(`${JSON.stringify(err)}`);
+            batch_process_log(err, startTime, ERROR);
             return;
             // throw err;
         }
@@ -184,6 +193,7 @@ const uploadFile = (filePath, backupPath) => {
         s3.upload(params, function (s3Err, data) {
             if (s3Err) {
                 TIMELOGGER.error(`${JSON.stringify(s3Err)}`);
+                batch_process_log(s3Err, startTime, ERROR);
                 return;
             }
             console.log(`File uploaded successfully at ${data.Location}`);
@@ -200,19 +210,24 @@ const moveToBackUp = function (oldPath, newPath) {
         } catch (err) {
             // console.log('move_file mkdirSync err ');
             TIMELOGGER.error(`move_file mkdirSync err: ${err}`);
+            batch_process_log(err, startTime, ERROR);
         }
     }
     var readStream = fs.createReadStream(oldPath);
     var writeStream = fs.createWriteStream(newPath);
 
     readStream.on('error', function (err) {
-        if (err)
-            TIMELOGGER.error(`File Upload read stream error: ${err.message}`)
+        if (err) {
+            TIMELOGGER.error(`File Upload read stream error: ${err.message}`);
+            batch_process_log(err, startTime, ERROR);
+        }
     });
     writeStream.on('error', function (err) {
 
-        if (err)
-            TIMELOGGER.error(`File Upload write stream error: ${err.message}`)
+        if (err) {
+            TIMELOGGER.error(`File Upload write stream error: ${err.message}`);
+            batch_process_log(err, startTime, ERROR);
+        }
 
     });
 
@@ -223,18 +238,43 @@ const moveToBackUp = function (oldPath, newPath) {
     readStream.pipe(writeStream);
 }
 
-var getDate = function() {
+var getDate = function () {
     let d = new Date();
-    return `${d.getDate()}_${(d.getMonth() + 1)}_${d.getFullYear()}_${d.getHours()}_${d.getMinutes()}_${d.getSeconds()}`; 
+    return `${d.getDate()}_${(d.getMonth() + 1)}_${d.getFullYear()}_${d.getHours()}_${d.getMinutes()}_${d.getSeconds()}`;
 }
 
-var deleteFile = function(filePath) {
+var deleteFile = function (filePath) {
+    let dataBase = filePath.includes('.sql') ? 'SQL' : 'NEO4J';
     fs.unlink(filePath, function (err) {
-        if (err)
-            TIMELOGGER.error(`File Upload write stream error: ${err.message}`)
+        if (err) {
+            TIMELOGGER.error(`File Upload write stream error: ${err.message}`);
+            batch_process_log(err, startTime, ERROR);
+        }
 
-        TIMELOGGER.info(`File deleted after upload`)
+        TIMELOGGER.info(`File deleted after upload`);
+        batch_process_log(`File deleted after upload for ${dataBase}`, startTime, SUCCESS);
     });
+}
+
+function batch_process_log(error, startTime, statusMessage) {
+    var message = null;
+    if (statusMessage === ERROR) {
+        message = error.message;
+    } else {
+        message = error;
+    }
+    models.Batch_Process.create({
+        start_time: startTime,
+        end_time: models.sequelize.literal('NOW()'),
+        process_status: statusMessage,
+        log_message: message
+    })
+        .then(function () {
+            TIMELOGGER.info(`batch_process_log done successfully STATUS: ${statusMessage} MESSAGE: ${message}`);
+        })
+        .catch(function (err) {
+            TIMELOGGER.error(`batch_process_log err: ${err}`);
+        });
 }
 
 // expose app

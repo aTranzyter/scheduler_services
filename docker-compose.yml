@@ -1,0 +1,65 @@
+version: '3.3'
+
+services: 
+    dump-scheduler-services:
+        restart: always
+        image: dump-scheduler-services:latest
+        container_name: dump-scheduler-services
+        networks: 
+            - app-network
+        environment: 
+            APP_PORT: ${DUMP_SCHD_PORT}
+            DB_USERNAME: ${MYSQL_USER}
+            DB_PASSWORD: ${MYSQL_PASSWORD}
+            DB_NAME: ${DB_SCHEMA}
+            DB_HOST: ${DB_HOST}
+            DB_PORT: ${MYSQL_INT_PORT}
+            
+            NEO4J_HOST: ${NEO4J_HOST}
+            NEO4J_USERNAME: ${NEO4J_USERNAME}
+            NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+            SQL_BACKUP_FILE: ${SQL_BACKUP_FILE}
+
+            AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+            SECRET_ACCESS_KEY_ID: ${SECRET_ACCESS_KEY_ID}
+            S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+
+            SCHDULE_INTERVAL: ${SCHDULE_INTERVAL}
+            # every hour:
+            # every day night 12: 
+            BACKUP_ARCHIVE: ${BACKUP_ARCHIVE}    
+        depends_on: 
+            - mysql 
+        volumes: 
+           # - ${SQL_BACKUP_FILE}:/home/usr/app/${SQL_BACKUP_FILE}
+           #- ${NEO4J_BACKUP_FILE}:/home/usr/app/${NEO4J_BACKUP_FILE}
+            - ${BACKUP_ARCHIVE}:/home/usr/app/${BACKUP_ARCHIVE}
+
+    mysql:
+        image: mysql:5.7
+        restart: always
+        environment:
+            MYSQL_DATABASE: ${DB_SCHEMA}
+            # So you don't have to use root, but you can if you like
+            MYSQL_USER: ${MYSQL_USER}
+            # You can use whatever password you like
+            MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+            # Password for root access
+            MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+        ports:
+            # <Port exposed> : < MySQL Port running inside container>
+             - "${MYSQL_EXT_PORT}:${MYSQL_INT_PORT}"
+          # expose:
+          #   # Opens port ${MYSQL_PORT} on the container
+          #   - "${MYSQL_PORT}"
+      
+      
+            # Where our data will be persisted
+        volumes:
+            - ./my-db:/var/lib/mysql
+        networks:
+            - app-network
+
+networks:
+    app-network:
+        driver: bridge        

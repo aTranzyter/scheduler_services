@@ -140,8 +140,8 @@ const backupNeo4j = function () {
     });
 
     data.on("close", code => {
-        console.log(`child process exited with code ${code}`);
-        TIMELOGGER.info(`child process exited with code ${code}`);
+        console.log(`child process exited with code ${code} Zipping Backedup folder`);
+        TIMELOGGER.info(`child process exited with code ${code} Zipping Backedup folder`);
         zipBackupFolder();
     });
 }
@@ -152,10 +152,10 @@ const zipBackupFolder = function () {
 
     compressing.tgz.compressDir(`${config.NEO4J_BACKUP_FILE}`, neo4JZip)
         .then(() => {
-            console.log('Done');
+            console.log('File Compress Done Succefully');
             rimraf(config.NEO4J_BACKUP_FILE, function () {
                 TIMELOGGER.info(`Neo4j backup Zip created and folder removed`);
-                console.log("done");
+                console.log("Neo4j backup Zip created and folder removed");
             });
             TIMELOGGER.info(`Zipped Successfully ${config.NEO4J_BACKUP_FILE}.gz`);
             if (config.AWS_ACCESS_KEY_ID && config.SECRET_ACCESS_KEY_ID && config.S3_BUCKET_NAME) {
@@ -204,6 +204,7 @@ const uploadFile = (filePath, backupPath) => {
 };
 
 const moveToBackUp = function (oldPath, newPath) {
+    let dataBase = oldPath.includes('.sql') ? 'SQL' : 'NEO4J';
     if (!fs.existsSync(config.BACKUP_ARCHIVE)) {
         try {
             fs.mkdirSync(config.BACKUP_ARCHIVE);
@@ -232,6 +233,8 @@ const moveToBackUp = function (oldPath, newPath) {
     });
 
     readStream.on('close', function () {
+        console.log(`File Archived for ${dataBase} database.`);
+        TIMELOGGER.info(`File Archived for ${dataBase} database.`);
         deleteFile(oldPath);
     });
 

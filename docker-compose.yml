@@ -27,13 +27,15 @@ services:
             SCHDULE_INTERVAL: ${SCHDULE_INTERVAL}
             # every hour: 0 0 * * * *
             # every day night 12: 0 0 0 * * *
-            BACKUP_ARCHIVE: ${BACKUP_ARCHIVE}    
+            BACKUP_ARCHIVE: ${BACKUP_ARCHIVE}
+            LOG_FILE_PATH: ${LOG_FILE_PATH} 
         depends_on: 
             - mysql 
         volumes: 
            # - ${SQL_BACKUP_FILE}:/home/usr/app/${SQL_BACKUP_FILE}
            #- ${NEO4J_BACKUP_FILE}:/home/usr/app/${NEO4J_BACKUP_FILE}
             - ${BACKUP_ARCHIVE}:/home/usr/app/${BACKUP_ARCHIVE}
+            - ${LOG_FILE_PATH}:/home/usr/app/${LOG_FILE_PATH}
 
     mysql:
         image: mysql:5.7

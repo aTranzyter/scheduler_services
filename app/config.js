@@ -30,8 +30,8 @@ exports.SQL = {
 
 // exports.SECRET = '9211dc48153ba70a02d0df64b2550134';
 exports.TOKENHEADER = 'x-access-token';
-exports.LOG_FILE_PATH = process.env.LOG_FOLDER || '../dump_scheduler_log/';
-exports.ERROR_FILE_PATH = process.env.ERROR_FILE_PATH || '../dump_scheduler_error_data/';
+exports.LOG_FILE_PATH = process.env.LOG_FILE_PATH || './dump_scheduler_log/';
+exports.ERROR_FILE_PATH = process.env.ERROR_FILE_PATH || './dump_scheduler_error_data/';
 
 exports.SCHDULE_INTERVAL= '0 */1 * * * *';
 

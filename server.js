@@ -22,6 +22,7 @@ var startTime = new Date();
 const fs = require('fs');
 // Load the AWS SDK for Node.js
 var AWS = require('aws-sdk');
+var RESPONSE;
 
 // Set the region 
 // AWS.config.update({region: 'US EAST (Ohio)'});
@@ -48,6 +49,33 @@ var s3 = new AWS.S3({
 
 // set our port
 var port = process.env.APP_PORT || 8082;
+
+
+app.get('/backup', async function (req, response) {
+    RESPONSE = response;
+    startTime = new Date();
+    Promise.all([backupMysql(), backupNeo4j()]).then((res) => {
+        let result = {};
+        res.forEach((item, index) => {
+            let dbName = index == 0 ? 'SQL' : 'NEO4J';
+            if (item['error']) {
+                result[dbName] = {
+                    message: item['error'].message,
+                    code: item['error'].code,
+                    statusCode: 500
+                };
+            } else {
+                result[dbName] = {
+                    ...item,
+                    statusCode: 200
+                }
+                
+            }
+        });
+        RESPONSE.status(200).send(result);
+    });
+    // backupNeo4j();
+});
 
 // Sync sequelize
 const syncSequelize = function () {
@@ -80,78 +108,91 @@ const syncSequelize = function () {
 syncSequelize();
 
 const backupMysql = function () {
-    if (!fs.existsSync(config.SQL_BACKUP_FOLDER)) {
-        try {
-            fs.mkdirSync(config.SQL_BACKUP_FOLDER);
-        } catch (err) {
-            // console.log('move_file mkdirSync err ');
-            TIMELOGGER.error(`move_file mkdirSync err: ${err}`);
-            batch_process_log(err, startTime, ERROR);
+    // eslint-disable-next-line
+    return new Promise((resolve, reject) => {
+        if (!fs.existsSync(config.SQL_BACKUP_FOLDER)) {
+            try {
+                fs.mkdirSync(config.SQL_BACKUP_FOLDER);
+            } catch (err) {
+                // console.log('move_file mkdirSync err ');
+                TIMELOGGER.error(`move_file mkdirSync err: ${err}`);
+                batch_process_log(err, startTime, ERROR);
+                return resolve({ error: err });
+            }
         }
-    }
-    let sqlFileName = `${config.SQL_BACKUP_FOLDER}/${config.SQL_BACKUP_FILE}_${getDate()}.sql.gz`;
-    let sqlBackupFileName = `${config.BACKUP_ARCHIVE}/${config.SQL_BACKUP_FILE}_backup_${getDate()}.sql.gz`;
-    // console.log('sqlFileName ', sqlFileName)
-    // console.log('sqlBackupFileName ', sqlBackupFileName);
+        let sqlFileName = `${config.SQL_BACKUP_FOLDER}/${config.SQL_BACKUP_FILE}_${getDate()}.sql.gz`;
+        let sqlBackupFileName = `${config.BACKUP_ARCHIVE}/${config.SQL_BACKUP_FILE}_backup_${getDate()}.sql.gz`;
+        // console.log('sqlFileName ', sqlFileName)
+        // console.log('sqlBackupFileName ', sqlBackupFileName);
 
-    mysqldump({
-        connection: {
-            host: config.SQL.host,
-            user: config.SQL.username,
-            password: config.SQL.password,
-            database: config.SQL.database,
-        },
-        dumpToFile: sqlFileName,
-        compressFile: true,
-    }).then(() => {
-        TIMELOGGER.info('Backup Successfull.. Starting Upload to s3');
-        if (config.AWS_ACCESS_KEY_ID && config.SECRET_ACCESS_KEY_ID && config.S3_BUCKET_NAME) {
-            uploadFile(sqlFileName, sqlBackupFileName);
-        } else {
-            moveToBackUp(sqlFileName, sqlBackupFileName);
-        }
+        mysqldump({
+            connection: {
+                host: config.SQL.host,
+                user: config.SQL.username,
+                password: config.SQL.password,
+                database: config.SQL.database,
+            },
+            dumpToFile: sqlFileName,
+            compressFile: true,
+        }).then(async () => {
+            TIMELOGGER.info('Backup Successfull.. Starting Upload to s3');
+            let result;
+            if (config.AWS_ACCESS_KEY_ID && config.SECRET_ACCESS_KEY_ID && config.S3_BUCKET_NAME) {
+                result = await uploadFile(sqlFileName, sqlBackupFileName);
+            } else {
+                moveToBackUp(sqlFileName, sqlBackupFileName);
+            }
+            return resolve(result);
+        })
+            .catch(err => {
+                console.log('******************* ', err);
+                batch_process_log(err, startTime, ERROR);
+                return resolve({ error: err });
+            });
     })
-        .catch(err => {
-            console.log('******************* ', err);
-            batch_process_log(err, startTime, ERROR);
-        });
 }
 
 const backupNeo4j = function () {
-    let data = spawn("node", ["./app/neo4j-backup.js", "-a", "bolt://" + config.NEO4J_HOST, "-u",
-        config.NEO4J_USERNAME, "-p", config.NEO4J_PASSWORD, "-d", `${config.NEO4J_BACKUP_FILE}`]);
+    // eslint-disable-next-line
+    return new Promise((resolve, reject) => {
+        let data = spawn("node", ["./app/neo4j-backup.js", "-a", "bolt://" + config.NEO4J_HOST, "-u",
+            config.NEO4J_USERNAME, "-p", config.NEO4J_PASSWORD, "-d", `${config.NEO4J_BACKUP_FILE}`]);
 
-    data.stdout.on("data", data => {
-        console.log(`stdout: ${data}`);
-        // TIMELOGGER.info(`stdout: ${JSON.stringify(data)}`);
-    });
+        data.stdout.on("data", data => {
+            console.log(`stdout: ${data}`);
+            // TIMELOGGER.info(`stdout: ${JSON.stringify(data)}`);
+        });
 
-    data.stderr.on("data", data => {
-        console.log(`stderr: ${data}`);
-        TIMELOGGER.error(`stderr: ${JSON.stringify(data)}`);
-        batch_process_log(data, startTime, ERROR);
-    });
+        data.stderr.on("data", data => {
+            console.log(`stderr: ${data}`);
+            TIMELOGGER.error(`stderr: ${JSON.stringify(data)}`);
+            batch_process_log(data, startTime, ERROR);
+        });
 
-    data.on('error', (error) => {
-        console.log(`error: ${error.message}`);
-        TIMELOGGER.error(`error: ${error.message}`);
-        batch_process_log(error, startTime, ERROR);
-        return;
-    });
+        data.on('error', (error) => {
+            console.log(`error: ${error.message}`);
+            TIMELOGGER.error(`error: ${error.message}`);
+            batch_process_log(error, startTime, ERROR);
+            return;
+        });
 
-    data.on("close", code => {
-        console.log(`child process exited with code ${code} Zipping Backedup folder`);
-        TIMELOGGER.info(`child process exited with code ${code} Zipping Backedup folder`);
-        zipBackupFolder();
-    });
+        data.on("close", code => {
+            console.log(`child process exited with code ${code} Zipping Backedup folder`);
+            TIMELOGGER.info(`child process exited with code ${code} Zipping Backedup folder`);
+            zipBackupFolder(function(result) {
+                console.log(result);
+                resolve(result);
+            });
+        });
+    })
 }
 
-const zipBackupFolder = function () {
+const zipBackupFolder = function (cb) {
     let neo4JZip = `${config.NEO4J_BACKUP_FILE}_${getDate()}.gz`;
     let neo4JBackupZip = `${config.BACKUP_ARCHIVE}/${config.NEO4J_BACKUP_FILE.slice(2)}_backup_${getDate()}.gz`;
 
     compressing.tgz.compressDir(`${config.NEO4J_BACKUP_FILE}`, neo4JZip)
-        .then(() => {
+        .then(async () => {
             console.log('File Compress Done Succefully');
             rimraf(config.NEO4J_BACKUP_FILE, function () {
                 TIMELOGGER.info(`Neo4j backup Zip created and folder removed`);
@@ -159,7 +200,9 @@ const zipBackupFolder = function () {
             });
             TIMELOGGER.info(`Zipped Successfully ${config.NEO4J_BACKUP_FILE}.gz`);
             if (config.AWS_ACCESS_KEY_ID && config.SECRET_ACCESS_KEY_ID && config.S3_BUCKET_NAME) {
-                uploadFile(neo4JZip, neo4JBackupZip);
+                let result = await uploadFile(neo4JZip, neo4JBackupZip);
+                console.log('result ', result);
+                cb(result)
             } else {
                 moveToBackUp(neo4JZip, neo4JBackupZip);
             }
@@ -168,40 +211,46 @@ const zipBackupFolder = function () {
             console.log('err ', err);
             TIMELOGGER.error(`${JSON.stringify(err)}`);
             batch_process_log(err, startTime, ERROR);
+            cb({error: err});
         });
 }
 
-const uploadFile = (filePath, backupPath) => {
-    let fileName;
-    fileName = `${filePath.slice(2)}`;
-    if (fileName.includes('/')) {
-        fileName = fileName.slice(fileName.lastIndexOf('/') + 1);
-    }
-    TIMELOGGER.info(`Uploading ${fileName} To S3.`);
-    fs.readFile(filePath, (err, data) => {
-        if (err) {
-            TIMELOGGER.error(`${JSON.stringify(err)}`);
-            batch_process_log(err, startTime, ERROR);
-            return;
-            // throw err;
+function uploadFile(filePath, backupPath) {
+    // eslint-disable-next-line
+    return new Promise((resolve, reject) => {
+        let fileName;
+        fileName = `${filePath.slice(2)}`;
+        if (fileName.includes('/')) {
+            fileName = fileName.slice(fileName.lastIndexOf('/') + 1);
         }
-        const params = {
-            Bucket: config.S3_BUCKET_NAME, // pass your bucket name
-            Key: fileName, // file will be saved as testBucket/contacts.csv
-            Body: JSON.stringify(data, null, 2)
-        };
-        s3.upload(params, function (s3Err, data) {
-            if (s3Err) {
-                TIMELOGGER.error(`${JSON.stringify(s3Err)}`);
-                batch_process_log(s3Err, startTime, ERROR);
-                return;
+        TIMELOGGER.info(`Uploading ${fileName} To S3.`);
+        fs.readFile(filePath, (err, data) => {
+            if (err) {
+                TIMELOGGER.error(`${JSON.stringify(err)}`);
+                batch_process_log(err, startTime, ERROR);
+                return resolve({ error: err });
+                // throw err;
             }
-            console.log(`File uploaded successfully at ${data.Location}`);
-            TIMELOGGER.info(`File uploaded successfully at ${data.Location}`);
-            moveToBackUp(filePath, backupPath);
+            const params = {
+                Bucket: config.S3_BUCKET_NAME, // pass your bucket name
+                Key: fileName, // file will be saved as testBucket/contacts.csv
+                Body: JSON.stringify(data, null, 2)
+            };
+            s3.upload(params, function (s3Err, data) {
+                if (s3Err) {
+                    TIMELOGGER.error(`${JSON.stringify(s3Err)}`);
+                    batch_process_log(s3Err, startTime, ERROR);
+                    moveToBackUp(filePath, backupPath);
+                    return resolve({ error: s3Err });
+                }
+                console.log(`File uploaded successfully at ${data.Location}`);
+                TIMELOGGER.info(`File uploaded successfully at ${data.Location}`);
+                moveToBackUp(filePath, backupPath);
+                return resolve({ success: `File uploaded successfully at ${data.Location}` });
+            });
         });
     });
-};
+}
 
 const moveToBackUp = function (oldPath, newPath) {
     let dataBase = oldPath.includes('.sql') ? 'SQL' : 'NEO4J';

@@ -3,3 +3,4 @@ backup_archive
 backup_sql
 my-db
 logs
+dump_scheduler_log

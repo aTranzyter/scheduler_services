@@ -7,3 +7,13 @@ npm-debug.log
 .svn
 backup_archive
 backup_sql
+backup_neo4j
+data
+import
+plugins
+logs
+my-db
+dump_scheduler_log
+mysql
+neo4j
+restore

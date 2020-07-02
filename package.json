@@ -10,6 +10,7 @@
     "event-stream": "^4.0.1",
     "express": "^4.16.4",
     "mysql": "^2.9.0",
+    "mysql-import": "^4.0.24",
     "mysql2": "^1.6.5",
     "mysqldump": "^3.1.0",
     "neo4j-driver": "^4.0.2",

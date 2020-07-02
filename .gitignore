@@ -4,3 +4,10 @@ backup_sql
 my-db
 logs
 dump_scheduler_log
+backup_neo4j
+data
+import
+plugins
+mysql
+neo4j
+restore

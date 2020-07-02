@@ -22,6 +22,7 @@ var startTime = new Date();
 const fs = require('fs');
 // Load the AWS SDK for Node.js
 var AWS = require('aws-sdk');
+const Importer = require('./app/mysql-import');
 var RESPONSE;
 
 // Set the region 
@@ -44,7 +45,65 @@ var s3 = new AWS.S3({
 //         console.log("Success", data.Buckets);
 //     }
 // });
+function getFileListFromS3(cb) {
+    s3.listObjects(function (err, data) {
+        if (err) {
+            console.log("Error ", err);
+        } else {
+            // console.log("data ", data);
+            filterData(data.Contents, cb);
+        }
+    });
+}
 
+function filterData(data, cb) {
+    let sql_array = [];
+    let neo4j_array = [];
+
+    if (data && data.length) {
+        data.forEach(item => {
+            if (item.Key.indexOf('cypher') > 0) {
+                neo4j_array.push(item);
+            } else if (item.Key.indexOf('sql') > 0) {
+                sql_array.push(item);
+            }
+        });
+        neo4j_array.sort((a, b) => {
+            return a.LastModified < b.LastModified ? 1 : (a.LastModified > b.LastModified ? -1 : 0);
+        });
+        sql_array.sort((a, b) => {
+            return a.LastModified < b.LastModified ? 1 : (a.LastModified > b.LastModified ? -1 : 0);
+        });
+
+        // console.log('neo4j_array ', neo4j_array[0], ' sql_array ', sql_array[0]);
+        cb({ neo4j: neo4j_array[0], mysql: sql_array[0] });
+    }
+}
+
+function downloadFileFromS3(data, cb) {
+    if (!fs.existsSync(config.RESTORE_FOLDER)) {
+        try {
+            fs.mkdirSync(config.RESTORE_FOLDER);
+        } catch (err) {
+            // console.log('move_file mkdirSync err ');
+            TIMELOGGER.error(`move_file mkdirSync err: ${err}`);
+            cb({ error: err });
+            batch_process_log(err, startTime, ERROR);
+            // return resolve({ error: err });
+        }
+    }
+    let file = fs.createWriteStream(`${config.RESTORE_FOLDER}/${data.Key}`);
+    TIMELOGGER.info('Get File From S3');
+    s3.getObject({ Key: data.Key }).createReadStream()
+        .on('end', () => {
+            return cb({ "message": "Written SuccessFully" });
+        })
+        .on('error', (error) => {
+            TIMELOGGER.error('S3 File Download Error: ' + JSON.stringify(error));
+            return cb({ error: error });
+        }).pipe(file)
+    // });
+}
 // config.isProd = process.argv.includes('--production');
 
 // set our port
@@ -54,11 +113,12 @@ var port = process.env.APP_PORT || 8082;
 app.get('/backup', async function (req, response) {
     RESPONSE = response;
     startTime = new Date();
-    Promise.all([backupMysql(), backupNeo4j()]).then((res) => {
+    Promise.all([backupMysql(), backupNeo4j_APOC()]).then((res) => {
         let result = {};
+        // console.log('res res res resres res ************************ ', res);
         res.forEach((item, index) => {
             let dbName = index == 0 ? 'SQL' : 'NEO4J';
-            if (item['error']) {
+            if (item && item['error']) {
                 result[dbName] = {
                     message: item['error'].message,
                     code: item['error'].code,
@@ -69,7 +129,7 @@ app.get('/backup', async function (req, response) {
                     ...item,
                     statusCode: 200
                 }
-                
+
             }
         });
         RESPONSE.status(200).send(result);
@@ -77,22 +137,164 @@ app.get('/backup', async function (req, response) {
     // backupNeo4j();
 });
 
+app.get('/restore', async function (req, response) {
+    RESPONSE = response;
+    startTime = new Date();
+    getFileListFromS3(function (data) {
+        if (!data) {
+            return response.status(500).send();
+        }
+        Promise.all([RestoreMysql(data.mysql), RestoreNeo4j(data.neo4j)]).then((res) => {
+            let result = {};
+            res.forEach((item, index) => {
+                let dbName = index == 0 ? 'SQL' : 'NEO4J';
+                if (item['error']) {
+                    result[dbName] = {
+                        message: item['error'].message,
+                        code: item['error'].code,
+                        statusCode: 500
+                    };
+                } else {
+                    result[dbName] = {
+                        ...item,
+                        statusCode: 200
+                    }
+
+                }
+            });
+            RESPONSE.status(200).send(result);
+        })
+    })
+});
+
+app.get('/restore/neo4j', function(req, response) {
+    RESPONSE = response;
+    startTime = new Date();
+    getFileListFromS3(function (data) {
+        if (!data) {
+            return response.status(500).send();
+        }
+        Promise.all([RestoreNeo4j(data.neo4j)]).then((res) => {
+            let result = {};
+            res.forEach((item, index) => {
+                let dbName = index == 0 ? 'SQL' : 'NEO4J';
+                if (item['error']) {
+                    result[dbName] = {
+                        message: item['error'].message,
+                        code: item['error'].code,
+                        statusCode: 500
+                    };
+                } else {
+                    result[dbName] = {
+                        ...item,
+                        statusCode: 200
+                    }
+
+                }
+            });
+            RESPONSE.status(200).send(result);
+        })
+    })
+});
+
+
+app.get('/restore/mysql', function(req, response) {
+    RESPONSE = response;
+    startTime = new Date();
+    getFileListFromS3(function (data) {
+        if (!data) {
+            return response.status(500).send();
+        }
+        Promise.all([RestoreMysql(data.mysql)]).then((res) => {
+            let result = {};
+            res.forEach((item, index) => {
+                let dbName = index == 0 ? 'SQL' : 'NEO4J';
+                if (item['error']) {
+                    result[dbName] = {
+                        message: item['error'].message,
+                        code: item['error'].code,
+                        statusCode: 500
+                    };
+                } else {
+                    result[dbName] = {
+                        ...item,
+                        statusCode: 200
+                    }
+
+                }
+            });
+            RESPONSE.status(200).send(result);
+        })
+    })
+})
+
+function RestoreMysql(data) {
+    // eslint-disable-next-line
+    return new Promise((resolve, reject) => {
+        console.log('sql data ', data);
+        // DOWNLOAD FILE FROM S3 BUCKET
+        downloadFileFromS3(data, function (fileData) {
+            if (fileData['error']) {
+                return resolve(fileData);
+            } else {
+                let importer = new Importer({
+                    host: config.SQL.host,
+                    user: config.SQL.username,
+                    password: config.SQL.password,
+                    database: config.SQL.database});
+                
+                console.log(' importer ', importer);
+                importer.import(`${config.RESTORE_FOLDER}/${data.Key}`).then(() => {
+                    var files_imported = importer.getImported();
+                    console.log(`${files_imported.length} SQL file(s) imported.`);
+                    resolve({"message": "Imported Sql SuccessFully"});
+                }).catch(err => {
+                    console.error(err);
+                    resolve({error: err});
+                });
+            }
+        })
+    });
+}
+
+function RestoreNeo4j(data) {
+    // eslint-disable-next-line
+    return new Promise((resolve, reject) => {
+        // console.log('data neo4j ', data);        // DOWNLOAD FILE FROM S3 BUCKET
+        downloadFileFromS3(data, function (fileData) {
+            if (fileData['error']) {
+                TIMELOGGER.error('S3 File Download Error, FILE: ' + data.Key);
+                return resolve(fileData);
+            } else {
+                TIMELOGGER.info('Latest File Downloaded Successfully, FILE: '+ data.Key);
+                const apocJs = require('./app/neo4j-apoc');
+                apocJs.upload_APOC_backup(`${config.RESTORE_FOLDER}/${data.Key}`, function (args) {
+                    console.log('upload_APOC_backup args ', args);
+                    TIMELOGGER.info('Restored SuccessFully !');
+                    return resolve(args);
+                });
+            }
+        })
+    });
+}
 // Sync sequelize
 const syncSequelize = function () {
-    models.sequelize.sync().then(async function () {
+    models.sequelize.sync({force: true}).then(async function () {
         // start app ===============================================
         // startup our app at http://localhost:8082
         app.listen(port);
         console.log('server running on port ' + port);
         TIMELOGGER.info('server running on port ' + port);
-
-        // start cron after database syncup
-        cron.schedule(config.SCHDULE_INTERVAL, function () {
-            console.log(' Scheduler ', new Date().getSeconds());
-            startTime = new Date();
-            backupMysql();
-            backupNeo4j();
-        });
+        setTimeout(() => {
+            // start cron after database syncup
+            cron.schedule(config.SCHDULE_INTERVAL, function () {
+                console.log(' Scheduler ', new Date().getSeconds());
+                startTime = new Date();
+                backupMysql();
+                // backupNeo4j();
+                backupNeo4j_APOC();
+            });
+        }, (1000 * 60 * 2));
     }).catch(function (err) {
         console.log(' SEQUEL ERR ', err);
         TIMELOGGER.log('SEQUEL ERR ', err);
@@ -120,8 +322,8 @@ const backupMysql = function () {
                 return resolve({ error: err });
             }
         }
-        let sqlFileName = `${config.SQL_BACKUP_FOLDER}/${config.SQL_BACKUP_FILE}_${getDate()}.sql.gz`;
-        let sqlBackupFileName = `${config.BACKUP_ARCHIVE}/${config.SQL_BACKUP_FILE}_backup_${getDate()}.sql.gz`;
+        let sqlFileName = `${config.SQL_BACKUP_FOLDER}/${config.SQL_BACKUP_FILE}_${getDate()}.sql`;
+        let sqlBackupFileName = `${config.BACKUP_ARCHIVE}/${config.SQL_BACKUP_FILE}_backup_${getDate()}.sql`;
         // console.log('sqlFileName ', sqlFileName)
         // console.log('sqlBackupFileName ', sqlBackupFileName);
 
@@ -133,7 +335,7 @@ const backupMysql = function () {
                 database: config.SQL.database,
             },
             dumpToFile: sqlFileName,
-            compressFile: true,
+            // compressFile: true,
         }).then(async () => {
             TIMELOGGER.info('Backup Successfull.. Starting Upload to s3');
             let result;
@@ -145,13 +347,50 @@ const backupMysql = function () {
             return resolve(result);
         })
             .catch(err => {
-                console.log('******************* ', err);
+                // console.log('******************* ', err);
                 batch_process_log(err, startTime, ERROR);
                 return resolve({ error: err });
             });
     })
 }
 
+const backupNeo4j_APOC = function () {
+    // eslint-disable-next-line
+   return new Promise((resolve, reject) => {
+        const apocJs = require('./app/neo4j-apoc');
+        apocJs.create_APOC_backup(async function (args) {
+            // console.log("args backupNeo4j_APOC ", args);
+            TIMELOGGER.info('Backup File Created');
+            let neo_original = `./neo4j/all.cypher`;
+            let neo_rename = `./neo4j/${getDate()}_${config.NEO4J_BACKUP_FILE}.cypher`;
+            let neo_backup = `${config.BACKUP_ARCHIVE}/backup_${getDate()}_${config.NEO4J_BACKUP_FILE}.cypher`;
+            // eslint-disable-next-line
+            fs.copyFile(neo_original, neo_rename, async function (err, data) {
+                if (err) {
+                    console.log('copy file error');
+                    resolve({error: err});
+                    return;
+                }
+                if (args == "SUCCESS") {
+                    let result;
+                    if (config.AWS_ACCESS_KEY_ID && config.SECRET_ACCESS_KEY_ID && config.S3_BUCKET_NAME) {
+                        result = await uploadFile(neo_rename, neo_backup);
+                        // console.log(" backupNeo4j_APOC ", result);
+                        TIMELOGGER.info('Backup File uploaded to '+ result.success);
+                        return resolve(result);
+                    } else {
+                        moveToBackUp(neo_rename, neo_backup);
+                        TIMELOGGER.info('AWS Configuration error');
+                        return resolve({error: 'AWS Configuration error'});
+                    }
+                }
+            });
+        });
+    })
+
+}
+
+//eslint-disable-next-line
 const backupNeo4j = function () {
     // eslint-disable-next-line
     return new Promise((resolve, reject) => {
@@ -179,7 +418,7 @@ const backupNeo4j = function () {
         data.on("close", code => {
             console.log(`child process exited with code ${code} Zipping Backedup folder`);
             TIMELOGGER.info(`child process exited with code ${code} Zipping Backedup folder`);
-            zipBackupFolder(function(result) {
+            zipBackupFolder(function (result) {
                 console.log(result);
                 resolve(result);
             });
@@ -211,7 +450,7 @@ const zipBackupFolder = function (cb) {
             console.log('err ', err);
             TIMELOGGER.error(`${JSON.stringify(err)}`);
             batch_process_log(err, startTime, ERROR);
-            cb({error: err});
+            cb({ error: err });
         });
 }
 
@@ -224,31 +463,33 @@ function uploadFile(filePath, backupPath) {
             fileName = fileName.slice(fileName.lastIndexOf('/') + 1);
         }
         TIMELOGGER.info(`Uploading ${fileName} To S3.`);
-        fs.readFile(filePath, (err, data) => {
-            if (err) {
-                TIMELOGGER.error(`${JSON.stringify(err)}`);
-                batch_process_log(err, startTime, ERROR);
-                return resolve({ error: err });
-                // throw err;
-            }
-            const params = {
-                Bucket: config.S3_BUCKET_NAME, // pass your bucket name
-                Key: fileName, // file will be saved as testBucket/contacts.csv
-                Body: JSON.stringify(data, null, 2)
-            };
-            s3.upload(params, function (s3Err, data) {
-                if (s3Err) {
-                    TIMELOGGER.error(`${JSON.stringify(s3Err)}`);
-                    batch_process_log(s3Err, startTime, ERROR);
-                    moveToBackUp(filePath, backupPath);
-                    return resolve({ error: s3Err });
-                }
-                console.log(`File uploaded successfully at ${data.Location}`);
-                TIMELOGGER.info(`File uploaded successfully at ${data.Location}`);
+        // fs.readFile(filePath, (err, data) => {
+        // if (err) {
+        //     TIMELOGGER.error(`${JSON.stringify(err)}`);
+        //     batch_process_log(err, startTime, ERROR);
+        //     return resolve({ error: err });
+        //     // throw err;
+        // }
+        console.log(' filePath *** ', filePath);
+        let fileContent = fs.readFileSync(filePath);
+        const params = {
+            Bucket: config.S3_BUCKET_NAME, // pass your bucket name
+            Key: fileName, // file will be saved as testBucket/contacts.csv
+            Body: fileContent
+        };
+        s3.upload(params, function (s3Err, data) {
+            if (s3Err) {
+                TIMELOGGER.error(`${JSON.stringify(s3Err)}`);
+                batch_process_log(s3Err, startTime, ERROR);
                 moveToBackUp(filePath, backupPath);
-                return resolve({ success: `File uploaded successfully at ${data.Location}` });
-            });
+                return resolve({ error: s3Err });
+            }
+            console.log(`File uploaded successfully at ${data.Location}`);
+            TIMELOGGER.info(`File uploaded successfully at ${data.Location}`);
+            moveToBackUp(filePath, backupPath);
+            return resolve({ success: `File uploaded successfully at ${data.Location}` });
         });
+        // });
     });
 }
 
@@ -289,6 +530,7 @@ const moveToBackUp = function (oldPath, newPath) {
 
     readStream.pipe(writeStream);
 }
+
 
 var getDate = function () {
     let d = new Date();

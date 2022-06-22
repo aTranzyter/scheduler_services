@@ -4,7 +4,7 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "async": "^3.1.0",
+    "async": "^3.2.2",
     "aws-sdk": "^2.686.0",
     "compressing": "^1.5.1",
     "event-stream": "^4.0.1",
